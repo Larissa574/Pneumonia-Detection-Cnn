@@ -17,7 +17,7 @@ import cv2
 from PIL import Image
 
 # ============ CHARGEMENT DU MODÈLE ============
-model = tf.keras.models.load_model('/kaggle/working/best_model.keras')
+model = tf.keras.models.load_model('best_model (2).keras')
 _ = model(tf.zeros((1, 224, 224, 3)), training=False)  # Initialiser
 
 class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
@@ -25,13 +25,17 @@ class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
 # ============ FONCTION GRAD-CAM ============
 def make_gradcam_heatmap(img_array):
     """Calcule la heatmap Grad-CAM pour l'explication"""
+    # Pour le modèle de production (sans augmentation), on cherche la dernière couche conv
+    base_model = model.get_layer('efficientnetb0')
+    
+    # Créer un modèle intermédiaire: sortie de la dernière couche conv + prédictions finales
+    last_conv_layer = base_model.get_layer('top_activation')  # Dernière conv d'EfficientNet
+    
     grad_model = tf.keras.models.Model(
         inputs=model.inputs,
-        outputs=[
-            model.get_layer('efficientnetb0').get_layer('top_conv').output,
-            model.outputs[0]
-        ]
+        outputs=[last_conv_layer.output, model.outputs[0]]
     )
+    
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array, training=False)
         pred_class = tf.argmax(predictions[0])
@@ -45,7 +49,7 @@ def make_gradcam_heatmap(img_array):
     heatmap = tf.squeeze(heatmap)
     heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
     
-    return heatmap.numpy(), pred_class.numpy(), predictions[0].numpy()
+    return heatmap.numpy(), int(pred_class.numpy()), predictions[0].numpy()
 
 # ============ PIPELINE DE PRÉDICTION ============
 def predict(image):
@@ -66,7 +70,7 @@ def predict(image):
     
     # Préparer pour le modèle
     img_array = tf.expand_dims(img_array, axis=0)
-    img_array = tf.cast(img_array, tf.float32)
+    img_array = tf.cast(img_array, tf.float32) / 255.0
 
     # Prédictions + Grad-CAM
     heatmap, pred_idx, probs = make_gradcam_heatmap(img_array)
@@ -77,7 +81,14 @@ def predict(image):
         np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET
     )
     heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-    img_np = np.array(img.resize((224, 224)))
+    
+    # Image originale sans normalisation pour l'overlay
+    img_np = np.array(image.resize((224, 224)))
+    if len(img_np.shape) == 2:
+        img_np = np.stack([img_np]*3, axis=-1)
+    if img_np.shape[-1] == 4:
+        img_np = img_np[:, :, :3]
+    
     superimposed = cv2.addWeighted(img_np, 0.6, heatmap_colored, 0.4, 0)
     superimposed = Image.fromarray(superimposed)
 
