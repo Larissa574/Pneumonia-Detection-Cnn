@@ -57,6 +57,9 @@ def make_gradcam_heatmap(img_array):
         tape.watch(img_array)
         # Get feature maps from conv layer
         conv_outputs = intermediate_layer_model(img_array)
+        # Ensure feature maps are float32 and watch them for gradients
+        conv_outputs = tf.cast(conv_outputs, tf.float32)
+        tape.watch(conv_outputs)
         # Get final predictions
         predictions = model(img_array, training=False)
         pred_idx = tf.argmax(predictions[0])
@@ -71,11 +74,17 @@ def make_gradcam_heatmap(img_array):
     
     # Global average pooling des gradients
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    
+
     # Pondérer les feature maps
-    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
-    heatmap = tf.maximum(heatmap[0], 0)
-    heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-8)
+    weighted_maps = conv_outputs[0] * pooled_grads
+    heatmap = tf.reduce_sum(weighted_maps, axis=-1)
+    heatmap = tf.maximum(heatmap, 0)
+    max_val = tf.reduce_max(heatmap)
+    if tf.math.is_nan(max_val) or max_val == 0:
+        # fallback to small constant map if invalid
+        heatmap = tf.zeros_like(heatmap)
+    else:
+        heatmap = heatmap / (max_val + 1e-8)
     
     return heatmap.numpy(), int(pred_idx.numpy()), predictions[0].numpy()
 
