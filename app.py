@@ -154,5 +154,5 @@ demo = gr.Interface(
 )
 
 if __name__ == "__main__":
-    # On Spaces, avoid using share=True and disable the threaded reloader
-    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), show_error=False, prevent_threaded_reload=True)
+    # On Spaces, avoid using share=True and prevent thread lock
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), show_error=False, prevent_thread_lock=True)
