@@ -15,10 +15,29 @@ import tensorflow as tf
 import numpy as np
 import cv2
 from PIL import Image
+import os
+import traceback
 
 # ============ CHARGEMENT DU MODÈLE ============
-model = tf.keras.models.load_model('best_model (2).keras')
-_ = model(tf.zeros((1, 224, 224, 3)), training=False)  # Initialiser
+model = None
+try:
+    # Try explicit name then fallback to any .keras file in the repo
+    candidate = 'best_model (2).keras'
+    if not os.path.exists(candidate):
+        keras_files = [f for f in os.listdir('.') if f.endswith('.keras')]
+        print('Workspace files:', os.listdir('.'))
+        print('Detected .keras files:', keras_files)
+        if keras_files:
+            candidate = keras_files[0]
+    print('Loading model from:', candidate)
+    model = tf.keras.models.load_model(candidate)
+    # Warmup once
+    _ = model(tf.zeros((1, 224, 224, 3)), training=False)
+    print('Model loaded successfully')
+except Exception as e:
+    print('❌ Model load failed:', e)
+    traceback.print_exc()
+    model = None
 
 class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
 
