@@ -25,40 +25,47 @@ class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
 # ============ FONCTION GRAD-CAM ============
 def make_gradcam_heatmap(img_array):
     """Calcule la heatmap Grad-CAM pour l'explication"""
-    try:
-        base_model = model.get_layer('efficientnetb0')
-        last_conv_layer = base_model.get_layer('top_activation')
-        
-        # Build the model first
-        _ = model(img_array, training=False)
-        
-        # Create intermediate model from base model only
-        grad_model = tf.keras.models.Model(
-            inputs=base_model.input,
-            outputs=[last_conv_layer.output, base_model.output]
-        )
-        
-        with tf.GradientTape() as tape:
-            conv_outputs, base_out = grad_model(img_array, training=False)
-            # Get final predictions
-            predictions = model(img_array, training=False)
-            pred_class = tf.argmax(predictions[0])
-            class_score = predictions[:, pred_class]
-        
-        grads = tape.gradient(class_score, conv_outputs)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-        
-        conv_outputs = conv_outputs[0]
-        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
-        heatmap = tf.squeeze(heatmap)
-        heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
-        
-        return heatmap.numpy(), int(pred_class.numpy()), predictions[0].numpy()
+    base_model = model.get_layer('efficientnetb0')
     
-    except Exception as e:
-        # Fallback: return zero heatmap if Grad-CAM fails
-        predictions = model(img_array, training=False)
-        return np.zeros((7, 7)), int(tf.argmax(predictions[0])), predictions[0].numpy()
+    # Créer deux modèles: un pour les feature maps, un pour les prédictions
+    # Model 1: from input to last conv layer
+    last_conv_layer = base_model.get_layer('top_activation')
+    
+    # Créer un nouveau modèle: input -> last_conv output
+    conv_output_model = tf.keras.Sequential([
+        tf.keras.layers.InputLayer(input_shape=(224, 224, 3)),
+        base_model,
+    ])
+    # Recréer avec les vraies couches
+    x_input = tf.keras.Input(shape=(224, 224, 3))
+    x = base_model(x_input)
+    # Model pour extraire les features ET prédictions finales
+    full_output = model(x_input)
+    
+    # Modèle complet qui retourne feature maps + prédiction
+    feature_extractor = tf.keras.Model(
+        inputs=x_input,
+        outputs=[last_conv_layer.output, full_output]
+    )
+    
+    with tf.GradientTape() as tape:
+        tape.watch(img_array)
+        feature_maps, predictions = feature_extractor(img_array, training=False)
+        pred_idx = tf.argmax(predictions[0])
+        class_score = predictions[:, pred_idx]
+    
+    # Calculer les gradients
+    grads = tape.gradient(class_score, feature_maps)
+    
+    # Global average pooling des gradients
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    
+    # Pondérer les feature maps
+    heatmap = tf.reduce_sum(feature_maps[0] * pooled_grads, axis=-1)
+    heatmap = tf.maximum(heatmap, 0)
+    heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-8)
+    
+    return heatmap.numpy(), int(pred_idx.numpy()), predictions[0].numpy()
 
 # ============ PIPELINE DE PRÉDICTION ============
 def predict(image):
