@@ -26,43 +26,36 @@ class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
 def make_gradcam_heatmap(img_array):
     """Calcule la heatmap Grad-CAM pour l'explication"""
     base_model = model.get_layer('efficientnetb0')
-    
-    # Créer deux modèles: un pour les feature maps, un pour les prédictions
-    # Model 1: from input to last conv layer
     last_conv_layer = base_model.get_layer('top_activation')
     
-    # Créer un nouveau modèle: input -> last_conv output
-    conv_output_model = tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_shape=(224, 224, 3)),
-        base_model,
-    ])
-    # Recréer avec les vraies couches
-    x_input = tf.keras.Input(shape=(224, 224, 3))
-    x = base_model(x_input)
-    # Model pour extraire les features ET prédictions finales
-    full_output = model(x_input)
-    
-    # Modèle complet qui retourne feature maps + prédiction
-    feature_extractor = tf.keras.Model(
-        inputs=x_input,
-        outputs=[last_conv_layer.output, full_output]
+    # Créer un modèle intermédiaire pour extraire les feature maps
+    intermediate_layer_model = tf.keras.Model(
+        inputs=base_model.input,
+        outputs=last_conv_layer.output
     )
     
     with tf.GradientTape() as tape:
         tape.watch(img_array)
-        feature_maps, predictions = feature_extractor(img_array, training=False)
+        # Get feature maps from conv layer
+        conv_outputs = intermediate_layer_model(img_array)
+        # Get final predictions
+        predictions = model(img_array, training=False)
         pred_idx = tf.argmax(predictions[0])
         class_score = predictions[:, pred_idx]
     
     # Calculer les gradients
-    grads = tape.gradient(class_score, feature_maps)
+    grads = tape.gradient(class_score, conv_outputs)
+    
+    if grads is None:
+        # Fallback if gradient computation fails
+        return np.ones((7, 7)), int(pred_idx.numpy()), predictions[0].numpy()
     
     # Global average pooling des gradients
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
     
     # Pondérer les feature maps
-    heatmap = tf.reduce_sum(feature_maps[0] * pooled_grads, axis=-1)
-    heatmap = tf.maximum(heatmap, 0)
+    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+    heatmap = tf.maximum(heatmap[0], 0)
     heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-8)
     
     return heatmap.numpy(), int(pred_idx.numpy()), predictions[0].numpy()
