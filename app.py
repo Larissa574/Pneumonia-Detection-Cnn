@@ -25,31 +25,40 @@ class_names = ['BACTERIA', 'NORMAL', 'VIRUS']
 # ============ FONCTION GRAD-CAM ============
 def make_gradcam_heatmap(img_array):
     """Calcule la heatmap Grad-CAM pour l'explication"""
-    # Pour le modèle de production (sans augmentation), on cherche la dernière couche conv
-    base_model = model.get_layer('efficientnetb0')
+    try:
+        base_model = model.get_layer('efficientnetb0')
+        last_conv_layer = base_model.get_layer('top_activation')
+        
+        # Build the model first
+        _ = model(img_array, training=False)
+        
+        # Create intermediate model from base model only
+        grad_model = tf.keras.models.Model(
+            inputs=base_model.input,
+            outputs=[last_conv_layer.output, base_model.output]
+        )
+        
+        with tf.GradientTape() as tape:
+            conv_outputs, base_out = grad_model(img_array, training=False)
+            # Get final predictions
+            predictions = model(img_array, training=False)
+            pred_class = tf.argmax(predictions[0])
+            class_score = predictions[:, pred_class]
+        
+        grads = tape.gradient(class_score, conv_outputs)
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        
+        conv_outputs = conv_outputs[0]
+        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+        heatmap = tf.squeeze(heatmap)
+        heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
+        
+        return heatmap.numpy(), int(pred_class.numpy()), predictions[0].numpy()
     
-    # Créer un modèle intermédiaire: sortie de la dernière couche conv + prédictions finales
-    last_conv_layer = base_model.get_layer('top_activation')  # Dernière conv d'EfficientNet
-    
-    grad_model = tf.keras.models.Model(
-        inputs=model.inputs,
-        outputs=[last_conv_layer.output, model.outputs[0]]
-    )
-    
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array, training=False)
-        pred_class = tf.argmax(predictions[0])
-        class_score = predictions[:, pred_class]
-    
-    grads = tape.gradient(class_score, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    
-    conv_outputs = conv_outputs[0]
-    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
-    heatmap = tf.squeeze(heatmap)
-    heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
-    
-    return heatmap.numpy(), int(pred_class.numpy()), predictions[0].numpy()
+    except Exception as e:
+        # Fallback: return zero heatmap if Grad-CAM fails
+        predictions = model(img_array, training=False)
+        return np.zeros((7, 7)), int(tf.argmax(predictions[0])), predictions[0].numpy()
 
 # ============ PIPELINE DE PRÉDICTION ============
 def predict(image):
